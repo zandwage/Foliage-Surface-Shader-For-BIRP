@@ -2,17 +2,21 @@ Shader "Custom/FoliageShader"
 {
     Properties
     {
-        _Color ("Color", Color) = (1,1,1,1)
+        _ColorTint ("Color Tint", Color) = (1,1,1,1)
         _MainTex ("Albedo (RGB)", 2D) = "white" {}
-        _Glossiness ("Smoothness", Range(0,1)) = 0.5
-        _Metallic ("Metallic", Range(0,1)) = 0.0
         _Cutoff ("Alpha Cutoff", Range(0,1)) = 0.5
 
+        [Header(Noise Settings)]
+        [Space]
         _NoiseTexture("Noise Texture", 2D) = "white" {}
         _NoiseScale("Noise Scale", Range(0, 2)) = 0.5
+        _NoiseBendFactor("Noise Bend Factor", Range(0, 5)) = 1
+        _NoiseBendSpeed("Noise Bend Speed", Range(0, 50)) = 10
 
         [Space]
 
+        [Header(Bend Settings)]
+        [Space]
         _BendFactor("Bend Factor", Range(0, 5)) = 1
         _BendSpeed("Bend Speed", Range(0, 50)) = 10
         _BendDirection("Bend Direction", vector) = (1, 1, 0, 0)
@@ -23,23 +27,26 @@ Shader "Custom/FoliageShader"
 
     SubShader
     {
-        Tags { "RenderType"="Cutout" }
+        Tags { "RenderType"="Cutout" "Queue"="AlphaTest"}
         LOD 200
         Cull Off
 
         CGPROGRAM
 
-        #pragma surface surf Standard alphatest:_Cutoff addshadow vertex:vert ditherCrossFade
+        #pragma surface surf Lambert alphatest:_Cutoff addshadow vertex:vert
         #pragma target 3.0
         #pragma multi_compile_instancing
 
         sampler2D _MainTex;
+
         sampler2D _NoiseTexture;
+        float _NoiseScale;
+        float _NoiseBendFactor;
+        float _NoiseBendSpeed;
 
         float _BendFactor;
         float _BendSpeed;
         float4 _BendDirection;
-        float _NoiseScale;
         float _BendRandomness;
         float _FoliageHeight;
         float _TreeTrunkHeight;
@@ -49,9 +56,7 @@ Shader "Custom/FoliageShader"
             float2 uv_MainTex;
         };
 
-        half _Glossiness;
-        half _Metallic;
-        fixed4 _Color;
+        fixed4 _ColorTint;
 
         UNITY_INSTANCING_BUFFER_START(Props)
 
@@ -69,46 +74,49 @@ Shader "Custom/FoliageShader"
         {
             UNITY_SETUP_INSTANCE_ID(v);
 
+            // calculates world pos from a matrix to save performance
             float3 vertPos = v.vertex;
-            float3 worldPos = mul(unity_ObjectToWorld, float4(0, 0, 0, 1)).xyz;
+            float3 worldPos = float3(unity_ObjectToWorld[0][3], unity_ObjectToWorld[1][3], unity_ObjectToWorld[2][3]);
 
-            // Generate random values based on world position
-            float randomPhase = hash(worldPos) * 6.28318;
-            float randomSpeed = 0.8 + hash(worldPos + 10) * 0.4;
-            float randomStrength = 0.7 + hash(worldPos + 20) * 0.6;
-            
-            float timeWithPhase = (_Time.y + randomPhase) * _BendSpeed * randomSpeed;
+            // optimized hash function
+            float h1 = hash(worldPos);
+            float h2 = hash(worldPos + 10);
 
-            // Main bending (already has the good falloff)
-            float remappedPosY = vertPos.y * _BendFactor / 100 * sin(timeWithPhase / 10);
-            float distortedPosY = pow(remappedPosY, 2) - remappedPosY;
-            float2 directedPos = distortedPosY * _BendDirection;
-            float3 distortedPos = float3(directedPos.x, 0, directedPos.y) + vertPos;
+            float randomPhase = h1 * 6.28138;
+            float randomSpeed = 0.8 + h2 * 0.4;
 
-            float noiseMask = saturate((vertPos.y - _TreeTrunkHeight) / max(0.001, (_FoliageHeight - _TreeTrunkHeight)));
+            float randomDirOffset = (h1 - 0.5) * _BendRandomness * 2.0;
+            float2 randomDir = float2(
+                cos(randomDirOffset),
+                sin(randomDirOffset)
+            );
 
-            float4 newTexCoord = float4(vertPos.xz * _NoiseScale * sin(_Time * _BendSpeed / 100), 0, 0);
-            float noiseX = (0.5 - tex2Dlod(_NoiseTexture, newTexCoord).r) * _BendFactor / 5;
-            float noiseY = (0.5 - tex2Dlod(_NoiseTexture, newTexCoord + 50).r) * _BendFactor / 5;
-            float noiseZ = (0.5 - tex2Dlod(_NoiseTexture, newTexCoord + 100).r) * _BendFactor / 5;
-            float3 noise = float3(noiseX, noiseY, noiseZ);
-            float3 noiseMasked = noise * noiseMask;
+            float2 finalDir = normalize(_BendDirection.xy + (randomDir * _BendRandomness));
 
-            float3 finalPosition = distortedPos + noiseMasked;
-            v.vertex = float4(finalPosition, 1);
+            float timeWithPhase = (_Time.y + randomPhase) * randomSpeed;
+
+            float remappedPosY = vertPos.y * (_BendFactor * 0.01) * sin(timeWithPhase * _BendSpeed * 0.1);
+            float distortedPosY = (remappedPosY * remappedPosY) - remappedPosY;
+
+            float3 distortedPos = vertPos;
+            distortedPos.xz += distortedPosY * finalDir;
+
+            half noiseMask = saturate((vertPos.y - _TreeTrunkHeight) / max(0.001, (_FoliageHeight - _TreeTrunkHeight)));
+            float2 noiseUV = vertPos.xz * _NoiseScale * sin(timeWithPhase * _NoiseBendSpeed * 0.008);
+            half3 noiseSample = tex2Dlod(_NoiseTexture, float4(noiseUV, 0, 0)).rgb;
+            half3 noise = (0.5 - noiseSample) * (_NoiseBendFactor * 0.2);
+
+            v.vertex.xyz = distortedPos + (noise * noiseMask);
         }
 
-        void surf (Input IN, inout SurfaceOutputStandard o)
+        void surf (Input IN, inout SurfaceOutput o)
         {
-            fixed4 c = tex2D (_MainTex, IN.uv_MainTex) * _Color;
-            o.Albedo = c.rgb;
+            fixed4 c = tex2D (_MainTex, IN.uv_MainTex) * _ColorTint;
 
-            o.Metallic = _Metallic;
-            o.Smoothness = _Glossiness;
+            o.Albedo = c.rgb;
             o.Alpha = c.a;
         }
         ENDCG
     }
     FallBack "Diffuse"
 }
-
