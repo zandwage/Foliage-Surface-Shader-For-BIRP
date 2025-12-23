@@ -2,14 +2,12 @@ Shader "Custom/FoliageShader"
 {
     Properties
     {
-        [TitleGroup(Material_Settings)]
         _Color ("Color", Color) = (1,1,1,1)
         _MainTex ("Albedo (RGB)", 2D) = "white" {}
         _Glossiness ("Smoothness", Range(0,1)) = 0.5
         _Metallic ("Metallic", Range(0,1)) = 0.0
         _Cutoff ("Alpha Cutoff", Range(0,1)) = 0.5
 
-        [TitleGroup(Wind_Settings)]
         _NoiseTexture("Noise Texture", 2D) = "white" {}
         _NoiseScale("Noise Scale", Range(0, 2)) = 0.5
 
@@ -22,8 +20,6 @@ Shader "Custom/FoliageShader"
         _FoliageHeight("Foliage Height", float) = 0
         _TreeTrunkHeight("Tree Trunk Height", float) = 0
     }
-
-    CustomEditor "MarkupAttributes.Editor.MarkedUpShaderGUI"
 
     SubShader
     {
@@ -115,3 +111,4 @@ Shader "Custom/FoliageShader"
     }
     FallBack "Diffuse"
 }
+
